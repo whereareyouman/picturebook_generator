@@ -116,14 +116,14 @@ pip install -r requirements.txt
 - For 6 scenes: approximately 36 seconds total
 
 **4. Model Not Available**
-- The system uses `gemini-2.0-flash-preview-image-generation`
-- If unavailable, try `gemini-2.0-flash-lite` (text only)
+- The system uses `imagen-3.0-generate-001`
+- If unavailable, try `gemini-2.5-flash` (text only)
 
 ## 🎯 Available Models (Free Tier)
 
 Based on your model list:
-- `gemini-2.0-flash-lite` - 30 rpm, 1500 req/day ✅ (text only)
-- `gemini-2.0-flash-preview-image-generation` - Image generation ✅
+- `gemini-2.5-flash` - 30 rpm, 1500 req/day ✅ (text only)
+- `imagen-3.0-generate-001` - Image generation ✅
 - `gemini-2.5-flash-preview-05-20` - 10 rpm, 500 req/day ✅
 - `gemma-3-27b-it` - 30 rpm, 14400 req/day ✅
 

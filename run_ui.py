@@ -19,17 +19,34 @@ def main():
     # Change to project directory
     import os
     os.chdir(project_dir)
-    
-    # Run with virtual environment python
-    venv_python = project_dir / "venv" / "bin" / "python"
-    
-    if venv_python.exists():
-        subprocess.run([str(venv_python), "flask_ui.py"])
-    else:
-        print("❌ Virtual environment not found. Please run:")
-        print("   python3 -m venv venv")
-        print("   source venv/bin/activate") 
-        print("   pip install -r requirements.txt")
+
+    # Prefer the currently running interpreter when already inside a venv (.venv/venv/uv)
+    in_venv = bool(os.environ.get("VIRTUAL_ENV")) or (
+        getattr(sys, "base_prefix", sys.prefix) != sys.prefix
+    )
+
+    candidates = []
+    if in_venv:
+        candidates.append(Path(sys.executable))
+
+    # Common virtualenv locations (uv uses .venv by default)
+    candidates.extend(
+        [
+            project_dir / ".venv" / "bin" / "python",
+            project_dir / "venv" / "bin" / "python",
+            Path(sys.executable),
+        ]
+    )
+
+    python_exe = next((p for p in candidates if p and p.exists()), None)
+
+    if not python_exe:
+        print("❌ 找不到可用的 Python 解释器。")
+        print("❌ Could not find a usable Python interpreter.")
+        return
+
+    print(f"🐍 Using python: {python_exe}")
+    subprocess.run([str(python_exe), "flask_ui.py"])
 
 if __name__ == "__main__":
     main()

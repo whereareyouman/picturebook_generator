@@ -50,9 +50,39 @@ app.secret_key = 'ai_story_generator_unlimited_v21'
 # Global variables for story generation
 generation_results = {}
 
-def generate_story_background(story_id, story_prompt, num_scenes, character_name="", setting="", style="cartoon"):
+_TEXT_LENGTH_ALLOWED = {"one_sentence", "short", "standard", "long"}
+
+
+def _normalize_text_length(value: str | None) -> str:
+    if not value:
+        return "standard"
+    v = str(value).strip().lower()
+    return v if v in _TEXT_LENGTH_ALLOWED else "standard"
+
+
+def _api_configured() -> bool:
+    """Check whether the required API credentials are configured."""
+    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    if provider in {"azure", "azure_openai", "azure-openai"}:
+        return bool(
+            (os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+            and (os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL"))
+        )
+    return bool(os.getenv("GOOGLE_API_KEY"))
+
+
+def generate_story_background(
+    story_id,
+    story_prompt,
+    num_scenes,
+    character_name="",
+    setting="",
+    style="cartoon",
+    text_length="standard",
+):
     """Generate story in background thread with unlimited scenes."""
     try:
+        text_length = _normalize_text_length(text_length)
         # Update status
         generation_results[story_id] = {
             'status': 'initializing',
@@ -60,7 +90,8 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
             'message': 'Setting up story generation...',
             'current_scene': 0,
             'total_scenes': num_scenes,
-            'scenes_completed': []
+            'scenes_completed': [],
+            'text_length': text_length,
         }
 
         # Test API connection first
@@ -72,7 +103,7 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
                 'status': 'error',
                 'progress': 0,
                 'message': 'API connection failed',
-                'error': 'Unable to connect to Gemini API. Check your API key.'
+                'error': 'Unable to connect to AI API. Check your API credentials and quota.'
             }
             return
 
@@ -122,7 +153,12 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
 
         # Generate story with images
         story_data = generate_custom_story_with_images(
-            client, enhanced_prompt, num_scenes, output_dir
+            client,
+            enhanced_prompt,
+            num_scenes,
+            output_dir,
+            progress_callback=progress_callback,
+            text_length=text_length,
         )
 
         if not story_data:
@@ -140,6 +176,7 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
             'character_name': character_name,
             'setting': setting,
             'style': style,
+            'text_length': text_length,
             'output_dir': str(output_dir)
         })
 
@@ -181,14 +218,14 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
 @app.route('/')
 def index():
     """Main page with modern interface."""
-    api_key_configured = bool(os.getenv('GOOGLE_API_KEY'))
+    api_key_configured = _api_configured()
     return render_template('index.html', api_key_configured=api_key_configured)
 
 
 @app.route('/generate', methods=['POST'])
 def generate_story():
     """Start unlimited story generation."""
-    if not os.getenv('GOOGLE_API_KEY'):
+    if not _api_configured():
         return jsonify({'error': 'API key not configured'}), 400
 
     data = request.json
@@ -200,6 +237,7 @@ def generate_story():
     character_name = data.get('character_name', '').strip()
     setting = data.get('setting', '').strip()
     style = data.get('style', 'cartoon').strip()
+    text_length = _normalize_text_length(data.get('text_length', 'standard'))
 
     if not story_prompt:
         return jsonify({'error': 'Story prompt is required'}), 400
@@ -213,7 +251,7 @@ def generate_story():
     # Start background generation
     thread = threading.Thread(
         target=generate_story_background,
-        args=(story_id, story_prompt, num_scenes, character_name, setting, style)
+        args=(story_id, story_prompt, num_scenes, character_name, setting, style, text_length)
     )
     thread.daemon = True
     thread.start()

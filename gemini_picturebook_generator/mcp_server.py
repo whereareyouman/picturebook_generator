@@ -940,7 +940,7 @@ def _artifact_footer(story_id: str, story_data: dict) -> str:
     <div class="generated-info">
         <p>✨ Generated with Google Gemini AI via Enhanced MCP Server ✨</p>
         <p>Created: {story_data.get('generated_at', 'Unknown date')}</p>
-        <p>Model: {story_data.get('model', 'gemini-2.0-flash-preview-image-generation')}</p>
+        <p>Model: {story_data.get('model', 'imagen-3.0-generate-001')}</p>
         <p>Story ID: {story_id}</p>
         <p><strong>🌐 For full experience with all images: open_story_in_browser(story_id="{story_id}")</strong></p>
     </div>
@@ -978,17 +978,32 @@ async def test_gemini_connection() -> str:
         JSON string with connection test results
     """
     try:
-        logger.info("Testing Gemini API connection...")
+        provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+        logger.info("Testing AI API connection... provider=%s", provider)
 
-        # Check if API key is configured
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key or api_key == "your_google_api_key_here":
-            return json.dumps({
-                "success": False,
-                "error": "Google API key not configured properly",
-                "help": "Set GOOGLE_API_KEY environment variable or update .env file",
-                "get_key_url": "https://aistudio.google.com/app/apikey",
-            })
+        # Check if API credentials are configured
+        if provider in {"azure", "azure_openai", "azure-openai"}:
+            endpoint = (
+                os.getenv("AZURE_OPENAI_ENDPOINT")
+                or os.getenv("OPENAI_API_BASE")
+                or os.getenv("OPENAI_BASE_URL")
+            )
+            api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+            if not endpoint or not api_key:
+                return json.dumps({
+                    "success": False,
+                    "error": "Azure OpenAI not configured properly",
+                    "help": "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY (and optionally AZURE_OPENAI_CHAT_DEPLOYMENT) in .env",
+                })
+        else:
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key or api_key == "your_google_api_key_here":
+                return json.dumps({
+                    "success": False,
+                    "error": "Google API key not configured properly",
+                    "help": "Set GOOGLE_API_KEY environment variable or update .env file",
+                    "get_key_url": "https://aistudio.google.com/app/apikey",
+                })
 
         # Test connection
         success = test_api_connection()
@@ -996,14 +1011,14 @@ async def test_gemini_connection() -> str:
         if success:
             return json.dumps({
                 "success": True,
-                "message": "✅ Gemini API connection successful",
+                "message": "✅ AI API connection successful",
                 "api_key_configured": True,
                 "timestamp": datetime.now().isoformat(),
             })
         else:
             return json.dumps({
                 "success": False,
-                "error": "Failed to connect to Gemini API",
+                "error": "Failed to connect to AI API",
                 "api_key_configured": True,
                 "help": "Check API key validity and quota limits",
             })
@@ -1109,7 +1124,7 @@ display_story_as_artifact(story_id="story_20250607_143022_123456")
 - Google API key required
 - Free tier: 1,500 requests/day
 - Rate limit: 10 requests/minute
-- Model: gemini-2.0-flash-preview-image-generation
+- Model: imagen-3.0-generate-001
 
 ## 📁 File Structure
 ```

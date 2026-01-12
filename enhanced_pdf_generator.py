@@ -12,14 +12,253 @@ Date: 2025-05-28
 import os
 from pathlib import Path
 from datetime import datetime
+import textwrap
 
+WEASYPRINT_AVAILABLE = False
+WEASYPRINT_IMPORT_ERROR = None
 try:
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
-except ImportError:
+except Exception as e:  # ImportError / OSError / etc.
     HTML = None
     CSS = None
     WEASYPRINT_AVAILABLE = False
+    WEASYPRINT_IMPORT_ERROR = str(e)
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+    PIL_AVAILABLE = False
+
+
+def _load_font(size: int):
+    """Load a reasonable font across platforms; fallback to default."""
+    if not PIL_AVAILABLE:
+        return None
+
+    # Common fonts on macOS and Linux
+    candidates = [
+        "/System/Library/Fonts/PingFang.ttc",  # macOS Chinese
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode MS.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/Library/Fonts/Arial Unicode MS.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ]
+
+    for p in candidates:
+        try:
+            if Path(p).exists():
+                return ImageFont.truetype(p, size=size)
+        except Exception:
+            continue
+
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+
+def _wrap_text_to_width(text: str, draw: "ImageDraw.ImageDraw", font: "ImageFont.ImageFont", max_width: int):
+    """Wrap text into lines that fit max_width (pixel-based)."""
+    if not text:
+        return []
+
+    # Normalize whitespace but keep explicit newlines as paragraph breaks
+    paragraphs = [p.strip() for p in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    lines: list[str] = []
+
+    for para in paragraphs:
+        if not para:
+            lines.append("")
+            continue
+
+        # If it contains spaces, wrap by words; otherwise wrap by characters (works for CJK)
+        tokens = para.split(" ") if " " in para else list(para)
+
+        current = ""
+        for token in tokens:
+            candidate = (current + (" " if current and " " in para else "") + token).strip() if " " in para else (current + token)
+            bbox = draw.textbbox((0, 0), candidate, font=font)
+            width = bbox[2] - bbox[0]
+            if width <= max_width or not current:
+                current = candidate
+            else:
+                lines.append(current)
+                current = token if " " in para else token
+
+        if current:
+            lines.append(current)
+
+    # Remove trailing empty lines
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    return lines
+
+
+def create_simple_pdf_with_pillow(story_data: dict, output_dir: Path) -> str | None:
+    """
+    Fallback PDF generation without WeasyPrint.
+    Creates a multi-page PDF by composing each scene into an A4-like canvas using Pillow.
+    """
+    if not PIL_AVAILABLE:
+        print("❌ Pillow (PIL) not available. Cannot generate PDF without WeasyPrint.")
+        return None
+
+    try:
+        title = story_data.get("original_prompt", "story")
+        safe_prompt = "".join(
+            c for c in str(title)[:30] if c.isalnum() or c in (" ", "-", "_")
+        ).strip() or "story"
+        pdf_filename = f"{safe_prompt.replace(' ', '_')}_pillow.pdf"
+        pdf_path = output_dir / pdf_filename
+
+        # A4-ish canvas at ~200 DPI
+        page_w, page_h = 1654, 2339
+        margin = 90
+
+        title_font = _load_font(56)
+        header_font = _load_font(44)
+        body_font = _load_font(30)
+
+        pages: list[Image.Image] = []
+
+        # Build index for scenes
+        images_by_scene: dict[int, Path] = {}
+        texts_by_scene: dict[int, list[str]] = {}
+
+        for scene in story_data.get("scenes", []):
+            scene_num = scene.get("scene_number")
+            if not isinstance(scene_num, int):
+                continue
+
+            if scene.get("type") == "image":
+                p = scene.get("path")
+                if p:
+                    img_path = Path(p)
+                else:
+                    img_path = output_dir / scene.get("filename", "")
+                if img_path.exists():
+                    images_by_scene[scene_num] = img_path
+            elif scene.get("type") == "text":
+                content = scene.get("content")
+                if content:
+                    texts_by_scene.setdefault(scene_num, []).append(str(content).strip())
+
+        num_scenes = story_data.get("num_scenes")
+        if not isinstance(num_scenes, int) or num_scenes <= 0:
+            if images_by_scene:
+                num_scenes = max(images_by_scene.keys())
+            elif texts_by_scene:
+                num_scenes = max(texts_by_scene.keys())
+            else:
+                num_scenes = 0
+
+        if num_scenes <= 0:
+            print("❌ No scenes found. Cannot generate PDF.")
+            return None
+
+        # Cover page
+        cover = Image.new("RGB", (page_w, page_h), "white")
+        draw = ImageDraw.Draw(cover)
+        y = margin
+        draw.text((margin, y), "AI Picture Book", fill="black", font=header_font)
+        y += 90
+        draw.text((margin, y), str(title), fill="black", font=title_font)
+        y += 140
+        meta = f"Scenes: {num_scenes}    Generated: {story_data.get('generated_at', '')[:19]}"
+        draw.text((margin, y), meta, fill="black", font=body_font)
+        pages.append(cover)
+
+        # Scene pages
+        for scene_num in range(1, num_scenes + 1):
+            scene_text = "\n".join(texts_by_scene.get(scene_num, [])).strip()
+            img_path = images_by_scene.get(scene_num)
+
+            # Base page
+            page = Image.new("RGB", (page_w, page_h), "white")
+            draw = ImageDraw.Draw(page)
+
+            # Header
+            y = margin
+            draw.text((margin, y), f"Scene {scene_num}", fill="black", font=header_font)
+            y += 70
+
+            # Image
+            image_area_h = int(page_h * 0.58)
+            if img_path and img_path.exists():
+                try:
+                    img = Image.open(img_path).convert("RGB")
+                    max_w = page_w - margin * 2
+                    max_h = image_area_h
+                    img.thumbnail((max_w, max_h))
+                    x = margin + (max_w - img.width) // 2
+                    page.paste(img, (x, y))
+                    y += img.height + 40
+                except Exception as e:
+                    draw.text((margin, y), f"[Image load failed: {e}]", fill="red", font=body_font)
+                    y += 60
+            else:
+                draw.text((margin, y), "[No image found]", fill="gray", font=body_font)
+                y += 60
+
+            # Text
+            max_text_w = page_w - margin * 2
+            if scene_text:
+                lines = _wrap_text_to_width(scene_text, draw, body_font, max_text_w)
+            else:
+                lines = []
+
+            line_h = 40
+            max_lines = max(1, (page_h - margin - y) // line_h)
+
+            # Render lines; if overflow, create continuation pages
+            remaining = lines
+            first = True
+            while True:
+                current_page = page if first else Image.new("RGB", (page_w, page_h), "white")
+                current_draw = draw if first else ImageDraw.Draw(current_page)
+
+                if not first:
+                    cy = margin
+                    current_draw.text((margin, cy), f"Scene {scene_num} (cont.)", fill="black", font=header_font)
+                    cy += 70
+                else:
+                    cy = y
+
+                chunk = remaining[:max_lines]
+                for ln in chunk:
+                    current_draw.text((margin, cy), ln, fill="black", font=body_font)
+                    cy += line_h
+
+                pages.append(current_page)
+                remaining = remaining[max_lines:]
+                if not remaining:
+                    break
+                first = False
+
+        # Save multi-page PDF
+        pages_rgb = [p.convert("RGB") for p in pages]
+        pages_rgb[0].save(
+            pdf_path,
+            "PDF",
+            save_all=True,
+            append_images=pages_rgb[1:],
+            resolution=200.0,
+        )
+        print(f"✅ Pillow PDF created: {pdf_path}")
+        return str(pdf_path)
+
+    except Exception as e:
+        print(f"❌ Pillow PDF generation failed: {e}")
+        return None
 
 
 def create_print_optimized_html(story_data, output_dir):
@@ -379,7 +618,12 @@ def create_enhanced_pdf(story_data, output_dir):
     if not WEASYPRINT_AVAILABLE:
         print("⚠️  WeasyPrint not available. PDF generation skipped.")
         print("   Install with: pip install weasyprint")
-        return None
+        if WEASYPRINT_IMPORT_ERROR:
+            print(f"   Import error: {WEASYPRINT_IMPORT_ERROR}")
+        print("   macOS system deps (Homebrew):")
+        print("   brew install pango cairo gdk-pixbuf libffi glib")
+        print("➡️  Falling back to Pillow PDF (no system deps needed)...")
+        return create_simple_pdf_with_pillow(story_data, output_dir)
 
     try:
         print("📄 Creating print-optimized HTML...")
@@ -629,7 +873,7 @@ def regenerate_existing_story_pdf(story_dir_path):
             story_data = {
                 'scenes': [],
                 'generated_at': datetime.now().isoformat(),
-                'model': 'gemini-2.0-flash-preview-image-generation',
+                'model': 'imagen-3.0-generate-001',
                 'original_prompt': story_dir.name.replace('story_', '').replace('_', ' '),
                 'num_scenes': len(list(story_dir.glob("scene_*.png")))
             }

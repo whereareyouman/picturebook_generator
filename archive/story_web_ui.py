@@ -89,7 +89,7 @@ def generate_story_with_progress(client, story_prompt, num_scenes, character_nam
         status_text.text("🎨 Connecting to Gemini AI...")
 
         # Use the image generation model
-        model = "gemini-2.0-flash-preview-image-generation"
+        model = "imagen-3.0-generate-001"
 
         status_text.text("📝 Generating story content...")
         progress_bar.progress(10)

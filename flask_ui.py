@@ -17,6 +17,7 @@ Version: 2.0 - Unlimited scenes & modern UI
 
 import json
 import os
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -48,9 +49,92 @@ app.secret_key = 'ai_story_generator_unlimited_v2'
 # Global variables for story generation
 generation_results = {}
 
-def generate_story_background(story_id, story_prompt, num_scenes, character_name="", setting="", style="cartoon"):
+_TEXT_LENGTH_ALLOWED = {"one_sentence", "short", "standard", "long"}
+
+
+def _normalize_text_length(value: str | None) -> str:
+    """Normalize text length preset coming from UI/API."""
+    if not value:
+        return "standard"
+    v = str(value).strip().lower()
+    return v if v in _TEXT_LENGTH_ALLOWED else "standard"
+
+
+def _text_length_requirement_line(text_length: str) -> str:
+    """Return a single bullet line describing desired narration length."""
+    tl = _normalize_text_length(text_length)
+    if tl == "one_sentence":
+        return "- Keep each scene text to exactly ONE short sentence (caption-like). Aim for <= 25 Chinese characters or <= 20 English words."
+    if tl == "short":
+        return "- Keep each scene description to 1-2 short sentences."
+    if tl == "long":
+        return "- Keep each scene description to 4-6 sentences."
+    return "- Keep each scene description between 2-4 sentences."
+
+
+def _shorten_scene_text(text: str, text_length: str) -> str:
+    """
+    Best-effort post-processing to enforce short narration.
+    This is a safety net when the model doesn't strictly follow instructions.
+    """
+    tl = _normalize_text_length(text_length)
+    t = (text or "").strip()
+    if not t:
+        return t
+
+    # Only post-process when user explicitly asked for shorter text.
+    # Preserve original formatting (e.g., newlines) for standard/long.
+    if tl not in {"one_sentence", "short"}:
+        return t
+
+    # Collapse whitespace to keep captions tidy
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # Strip common scene prefixes
+    t = re.sub(r"^(scene|Scene|SCENE)\s*\d+\s*[:\-–—]\s*", "", t).strip()
+    t = re.sub(r"^(场景|镜头|章节)\s*\d+\s*[：:，,\-–—]\s*", "", t).strip()
+
+    if tl == "one_sentence":
+        m = re.search(r"[。！？.!?]", t)
+        if m:
+            t = t[: m.end()].strip()
+        # Hard cap to avoid huge blocks if no punctuation
+        if len(t) > 120:
+            t = t[:120].rstrip()
+        return t
+
+    if tl == "short":
+        # Keep at most the first 2 sentences
+        parts = re.split(r"(?<=[。！？.!?])\s+", t)
+        t2 = " ".join(p for p in parts[:2] if p).strip()
+        return t2 or t
+
+    return t
+
+
+def _api_configured() -> bool:
+    """Check whether the required API credentials are configured."""
+    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    if provider in {"azure", "azure_openai", "azure-openai"}:
+        return bool(
+            (os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+            and (os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL"))
+        )
+    return bool(os.getenv("GOOGLE_API_KEY"))
+
+
+def generate_story_background(
+    story_id,
+    story_prompt,
+    num_scenes,
+    character_name="",
+    setting="",
+    style="cartoon",
+    text_length="standard",
+):
     """Generate story in background thread with unlimited scenes."""
     try:
+        text_length = _normalize_text_length(text_length)
         # Update status
         generation_results[story_id] = {
             'status': 'initializing',
@@ -58,7 +142,8 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
             'message': 'Setting up story generation...',
             'current_scene': 0,
             'total_scenes': num_scenes,
-            'scenes_completed': []
+            'scenes_completed': [],
+            'text_length': text_length,
         }
 
         # Test API connection first
@@ -70,7 +155,7 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
                 'status': 'error',
                 'progress': 0,
                 'message': 'API connection failed',
-                'error': 'Unable to connect to Gemini API. Check your API key.'
+                'error': 'Unable to connect to AI API. Check your API credentials and quota.'
             }
             return
 
@@ -120,7 +205,12 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
 
         # Create a custom generation function with progress tracking
         story_data = generate_story_with_progress(
-            client, enhanced_prompt, num_scenes, output_dir, progress_callback
+            client,
+            enhanced_prompt,
+            num_scenes,
+            output_dir,
+            progress_callback,
+            text_length=text_length,
         )
 
         if not story_data:
@@ -138,6 +228,7 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
             'character_name': character_name,
             'setting': setting,
             'style': style,
+            'text_length': text_length,
             'output_dir': str(output_dir)
         })
 
@@ -175,16 +266,40 @@ def generate_story_background(story_id, story_prompt, num_scenes, character_name
             'error': str(e)
         }
 
-def generate_story_with_progress(client, story_prompt, num_scenes, output_dir, progress_callback):
+def generate_story_with_progress(
+    client,
+    story_prompt,
+    num_scenes,
+    output_dir,
+    progress_callback,
+    text_length="standard",
+):
     """Enhanced story generation with progress tracking."""
+    text_length = _normalize_text_length(text_length)
+    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    if provider in {"azure", "azure_openai", "azure-openai"}:
+        # Azure path uses a different API shape (chat -> JSON scenes -> images)
+        from enhanced_story_generator import generate_custom_story_with_images
+
+        return generate_custom_story_with_images(
+            client,
+            story_prompt,
+            num_scenes,
+            output_dir,
+            delay_between_requests=0,
+            progress_callback=progress_callback,
+            text_length=text_length,
+        )
+
     import time
 
     from google.genai import types
 
-    # Use the image generation model
-    model = "gemini-2.0-flash-preview-image-generation"
+    # Use the image generation model (Gemini multimodal)
+    model = "gemini-2.5-flash-image"
 
     # Enhanced prompt for better story generation
+    text_length_line = _text_length_requirement_line(text_length)
     full_prompt = f"""
     You are an expert storyteller and illustrator creating a captivating picture book.
 
@@ -195,7 +310,7 @@ def generate_story_with_progress(client, story_prompt, num_scenes, output_dir, p
     - Include vivid, engaging descriptions suitable for illustration
     - Make it artistic, engaging, and age-appropriate
     - Generate both descriptive text and a corresponding image for each scene
-    - Keep each scene description between 2-4 sentences
+    {text_length_line}
 
     Please create exactly {num_scenes} scenes, each with descriptive text and an accompanying image.
     Structure: Scene 1: [description], Scene 2: [description], etc.
@@ -225,6 +340,7 @@ def generate_story_with_progress(client, story_prompt, num_scenes, output_dir, p
             'model': model,
             'original_prompt': story_prompt,
             'num_scenes': num_scenes,
+            'text_length': text_length,
             'total_parts': len(response.candidates[0].content.parts)
         }
 
@@ -235,9 +351,10 @@ def generate_story_with_progress(client, story_prompt, num_scenes, output_dir, p
 
         for i, part in enumerate(response.candidates[0].content.parts):
             if hasattr(part, 'text') and part.text is not None:
+                scene_text = _shorten_scene_text(part.text, text_length)
                 story_data['scenes'].append({
                     'type': 'text',
-                    'content': part.text,
+                    'content': scene_text,
                     'scene_number': scene_counter if scene_counter <= num_scenes else 'additional',
                     'part_index': i
                 })
@@ -293,13 +410,13 @@ def generate_story_with_progress(client, story_prompt, num_scenes, output_dir, p
 @app.route('/')
 def index():
     """Main page with modern interface."""
-    api_key_configured = bool(os.getenv('GOOGLE_API_KEY'))
+    api_key_configured = _api_configured()
     return render_template('index.html', api_key_configured=api_key_configured)
 
 @app.route('/generate', methods=['POST'])
 def generate_story():
     """Start unlimited story generation."""
-    if not os.getenv('GOOGLE_API_KEY'):
+    if not _api_configured():
         return jsonify({'error': 'API key not configured'}), 400
 
     data = request.json
@@ -311,6 +428,7 @@ def generate_story():
     character_name = data.get('character_name', '').strip()
     setting = data.get('setting', '').strip()
     style = data.get('style', 'cartoon').strip()
+    text_length = _normalize_text_length(data.get('text_length', 'standard'))
 
     if not story_prompt:
         return jsonify({'error': 'Story prompt is required'}), 400
@@ -324,7 +442,7 @@ def generate_story():
     # Start background generation
     thread = threading.Thread(
         target=generate_story_background,
-        args=(story_id, story_prompt, num_scenes, character_name, setting, style)
+        args=(story_id, story_prompt, num_scenes, character_name, setting, style, text_length)
     )
     thread.daemon = True
     thread.start()
@@ -1485,11 +1603,17 @@ if __name__ == '__main__':
 </html>
     """
 
-    with open(templates_dir / "index.html", 'w', encoding='utf-8') as f:
-        f.write(index_template)
+    # Only (re)create templates when missing to avoid overwriting user customizations.
+    index_template_path = templates_dir / "index.html"
+    gallery_template_path = templates_dir / "gallery.html"
 
-    with open(templates_dir / "gallery.html", 'w', encoding='utf-8') as f:
-        f.write(gallery_template)
+    if not index_template_path.exists():
+        with open(index_template_path, 'w', encoding='utf-8') as f:
+            f.write(index_template)
+
+    if not gallery_template_path.exists():
+        with open(gallery_template_path, 'w', encoding='utf-8') as f:
+            f.write(gallery_template)
 
     print("🚀 Starting Modern AI Story Generator UI v2.0")
     print("✨ Features: UNLIMITED scenes, modern design, real-time progress")

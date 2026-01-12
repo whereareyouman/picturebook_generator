@@ -446,6 +446,18 @@
                         </select>
                     </div>
                     <div class="form-group">
+                        <label for="text_length"><i class="fas fa-align-left"></i> Text length</label>
+                        <select id="text_length" name="text_length">
+                            <option value="one_sentence">📝 One sentence (caption)</option>
+                            <option value="short">✂️ Short (1-2 sentences)</option>
+                            <option value="standard" selected>📖 Standard (2-4 sentences)</option>
+                            <option value="long">📚 Long (4-6 sentences)</option>
+                        </select>
+                        <div style="font-size: 12px; color: #666; margin-top: 6px;">
+                            Tip: choose “One sentence” for 1 picture = 1 line.
+                        </div>
+                    </div>
+                    <div class="form-group">
                         <label for="num_scenes"><i class="fas fa-list-ol"></i> Number of scenes</label>
                         <div class="scene-input-container">
                             <input type="number" id="num_scenes" name="num_scenes" value="6" min="1" max="9999" class="scene-input">
@@ -526,6 +538,7 @@
                 character_name: formData.get('character_name'),
                 setting: formData.get('setting'),
                 style: formData.get('style'),
+                text_length: formData.get('text_length') || 'standard',
                 num_scenes: parseInt(formData.get('num_scenes'))
             };
 

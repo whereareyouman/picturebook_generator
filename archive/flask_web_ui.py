@@ -69,7 +69,7 @@ def generate_story_background(story_id, client, story_prompt, num_scenes, charac
         }
 
         # Use the image generation model
-        model = "gemini-2.0-flash-preview-image-generation"
+        model = "imagen-3.0-generate-001"
 
         generation_results[story_id]['message'] = 'Generating story content...'
         generation_results[story_id]['progress'] = 20

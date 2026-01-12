@@ -779,7 +779,7 @@ def _generate_artifact_footer(story_id: str, story_data: dict) -> str:
     <div class="generated-info">
         <p>✨ Generated with Google Gemini AI via MCP Server ✨</p>
         <p>Created: {story_data.get('generated_at', 'Unknown date')}</p>
-        <p>Model: {story_data.get('model', 'gemini-2.0-flash-preview-image-generation')}</p>
+        <p>Model: {story_data.get('model', 'imagen-3.0-generate-001')}</p>
         <p>Story ID: {story_id}</p>
     </div>
 </body>
@@ -967,7 +967,7 @@ display_story_as_artifact(story_id="story_20250607_143022_123456")
 - Google API key required
 - Free tier: 1,500 requests/day
 - Rate limit: 10 requests/minute
-- Model: gemini-2.0-flash-preview-image-generation
+- Model: imagen-3.0-generate-001
 
 ## 📁 File Structure
 ```

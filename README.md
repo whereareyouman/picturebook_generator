@@ -51,7 +51,7 @@ An AI-powered story generator that creates **unlimited** custom picture books wi
 
 1. **Install the package:**
    ```bash
-   cd /home/ty/Repositories/ai_workspace/gemini_picturebook_generator
+   cd gemini_picturebook_generator
    uv sync
    ```
 
@@ -117,7 +117,7 @@ Add this to your Claude Desktop `claude_desktop_config.json`:
       "command": "uv",
       "args": [
         "--directory",
-        "/home/ty/Repositories/ai_workspace/gemini_picturebook_generator",
+        "/path/to/gemini_picturebook_generator",
         "run",
         "gemini-picturebook-mcp"
       ],
@@ -145,7 +145,7 @@ Add this to your Claude Desktop `claude_desktop_config.json`:
 ### **Using uv (Recommended)**
 ```bash
 # Clone/navigate to project
-cd /home/ty/Repositories/ai_workspace/gemini_picturebook_generator
+cd gemini_picturebook_generator  # 或你克隆到的目录路径
 
 # Install
 uv sync
@@ -363,6 +363,12 @@ uv run pytest
 # Pre-commit hooks
 uv run pre-commit install
 ```
+
+## 📖 **关于本项目**
+
+本项目基于 [angrysky56/gemini-picturebook-generator](https://github.com/angrysky56/gemini-picturebook-generator) 进行修改和定制。
+
+原项目使用 MIT 许可证。
 
 ## 📄 **License**
 

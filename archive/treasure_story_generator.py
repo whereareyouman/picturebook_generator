@@ -54,7 +54,7 @@ def generate_story_with_images(client, output_dir):
         dict: Story data with text and image paths
     """
     # Use the image generation model
-    model = "gemini-2.0-flash-preview-image-generation"
+    model = "imagen-3.0-generate-001"
 
     contents = (
         "Generate a 6-scene story about a cartoon character who discovers a treasure map "

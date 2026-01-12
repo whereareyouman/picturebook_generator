@@ -51,6 +51,7 @@ app.secret_key = 'ai_story_generator_unlimited_v21'
 generation_results = {}
 
 _TEXT_LENGTH_ALLOWED = {"one_sentence", "short", "standard", "long"}
+_LANGUAGE_ALLOWED = {"auto", "zh-Hans", "zh-Hant", "en"}
 
 
 def _normalize_text_length(value: str | None) -> str:
@@ -59,6 +60,34 @@ def _normalize_text_length(value: str | None) -> str:
     v = str(value).strip().lower()
     return v if v in _TEXT_LENGTH_ALLOWED else "standard"
 
+
+def _normalize_language(value: str | None) -> str:
+    """
+    Normalize language option:
+    - auto (default): follow the user's prompt language
+    - zh-Hans: 简体中文
+    - zh-Hant: 繁體中文
+    - en: English
+    """
+    if not value:
+        return "auto"
+    v = str(value).strip()
+    vl = v.lower()
+
+    if vl in {"auto"}:
+        return "auto"
+    if vl in {"zh-hans", "zh_cn", "zh-cn", "zhcn", "cn", "sc", "simplified", "简体中文", "简体"}:
+        return "zh-Hans"
+    if vl in {"zh-hant", "zh_tw", "zh-tw", "zhtw", "tw", "tc", "traditional", "繁体中文", "繁體中文", "繁体", "繁體"}:
+        return "zh-Hant"
+    if vl in {"en", "english"}:
+        return "en"
+
+    # Accept canonical values directly
+    if v in _LANGUAGE_ALLOWED:
+        return v
+
+    return "auto"
 
 def _api_configured() -> bool:
     """Check whether the required API credentials are configured."""
@@ -79,10 +108,12 @@ def generate_story_background(
     setting="",
     style="cartoon",
     text_length="standard",
+    language="auto",
 ):
     """Generate story in background thread with unlimited scenes."""
     try:
         text_length = _normalize_text_length(text_length)
+        language = _normalize_language(language)
         # Update status
         generation_results[story_id] = {
             'status': 'initializing',
@@ -92,6 +123,7 @@ def generate_story_background(
             'total_scenes': num_scenes,
             'scenes_completed': [],
             'text_length': text_length,
+            'language': language,
         }
 
         # Test API connection first
@@ -159,6 +191,7 @@ def generate_story_background(
             output_dir,
             progress_callback=progress_callback,
             text_length=text_length,
+            language=language,
         )
 
         if not story_data:
@@ -177,6 +210,7 @@ def generate_story_background(
             'setting': setting,
             'style': style,
             'text_length': text_length,
+            'language': language,
             'output_dir': str(output_dir)
         })
 
@@ -237,6 +271,7 @@ def generate_story():
     character_name = data.get('character_name', '').strip()
     setting = data.get('setting', '').strip()
     style = data.get('style', 'cartoon').strip()
+    language = _normalize_language(data.get('language', 'auto'))
     text_length = _normalize_text_length(data.get('text_length', 'standard'))
 
     if not story_prompt:
@@ -251,7 +286,7 @@ def generate_story():
     # Start background generation
     thread = threading.Thread(
         target=generate_story_background,
-        args=(story_id, story_prompt, num_scenes, character_name, setting, style, text_length)
+        args=(story_id, story_prompt, num_scenes, character_name, setting, style, text_length, language)
     )
     thread.daemon = True
     thread.start()

@@ -36,6 +36,7 @@ except Exception as e:  # ImportError / OSError / etc.
     WEASYPRINT_IMPORT_ERROR = str(e)
 
 _TEXT_LENGTH_ALLOWED = {"one_sentence", "short", "standard", "long"}
+_LANGUAGE_ALLOWED = {"auto", "zh-Hans", "zh-Hant", "en"}
 
 
 def _normalize_text_length(value: str | None) -> str:
@@ -102,6 +103,57 @@ def _shorten_scene_text(text: str, text_length: str) -> str:
         return t2 or t
 
     return t
+
+
+def _normalize_language(value: str | None) -> str:
+    """
+    Normalize language option:
+    - auto (default): follow the user's prompt language
+    - zh-Hans: 简体中文
+    - zh-Hant: 繁體中文
+    - en: English
+    """
+    if not value:
+        return "auto"
+    v = str(value).strip()
+    vl = v.lower()
+
+    if vl in {"auto"}:
+        return "auto"
+    if vl in {"zh-hans", "zh_cn", "zh-cn", "zhcn", "cn", "sc", "simplified", "简体中文", "简体"}:
+        return "zh-Hans"
+    if vl in {"zh-hant", "zh_tw", "zh-tw", "zhtw", "tw", "tc", "traditional", "繁体中文", "繁體中文", "繁体", "繁體"}:
+        return "zh-Hant"
+    if vl in {"en", "english"}:
+        return "en"
+
+    if v in _LANGUAGE_ALLOWED:
+        return v
+    return "auto"
+
+
+def _language_requirement_line(language: str) -> str:
+    """Bullet line used in Gemini prompt."""
+    lang = _normalize_language(language)
+    if lang == "zh-Hans":
+        return "- Write all story narration in Simplified Chinese (简体中文). Do NOT use Traditional Chinese."
+    if lang == "zh-Hant":
+        return "- Write all story narration in Traditional Chinese (繁體中文). Do NOT use Simplified Chinese."
+    if lang == "en":
+        return "- Write all story narration in English."
+    return "- Use the same language as the user's prompt for the story narration."
+
+
+def _azure_language_rule(language: str) -> str:
+    """Rule line used in Azure JSON plan prompt."""
+    lang = _normalize_language(language)
+    if lang == "zh-Hans":
+        return '- All "title" and "text" fields MUST be in Simplified Chinese (简体中文). Do NOT use Traditional Chinese.'
+    if lang == "zh-Hant":
+        return '- All "title" and "text" fields MUST be in Traditional Chinese (繁體中文). Do NOT use Simplified Chinese.'
+    if lang == "en":
+        return '- All "title" and "text" fields MUST be in English.'
+    return '- Use the same language as the user prompt for all "title" and "text" fields.'
 
 
 def _get_ai_provider() -> str:
@@ -280,13 +332,18 @@ def _create_placeholder_image(image_path: Path, scene_num: int, caption: str = "
 
 
 def _azure_chat_generate_story_plan(
-    client, story_prompt: str, num_scenes: int, text_length: str = "standard"
+    client,
+    story_prompt: str,
+    num_scenes: int,
+    text_length: str = "standard",
+    language: str = "auto",
 ) -> dict:
     """Use Azure OpenAI chat model to generate a JSON scene plan."""
     cfg = _get_azure_openai_config()
     deployment = cfg["chat_deployment"]
     text_length = _normalize_text_length(text_length)
     text_rule = _azure_text_length_rule(text_length)
+    language_rule = _azure_language_rule(language)
 
     system = (
         "You are a picture-book author. Return ONLY valid JSON (no markdown).\n"
@@ -301,8 +358,9 @@ def _azure_chat_generate_story_plan(
         "Rules:\n"
         f"- EXACTLY {num_scenes} scenes.\n"
         f"{text_rule}\n"
+        f"{language_rule}\n"
         "- image_prompt describes ONE illustration, include art style, composition, characters.\n"
-        "- Prefer: text in Chinese if user prompt is Chinese; image_prompt in English.\n"
+        "- image_prompt MUST be in English (better for image models).\n"
     )
     user = (
         f'Story idea: \"{story_prompt}\"\n'
@@ -369,13 +427,20 @@ def _generate_custom_story_with_images_azure(
     delay_between_requests: int = 0,
     progress_callback=None,
     text_length: str = "standard",
+    language: str = "auto",
 ):
     """Azure OpenAI flow: chat -> JSON scenes -> (optional) images per scene."""
     if progress_callback:
         progress_callback(0, num_scenes, "Generating story outline (Azure OpenAI)...")
 
     try:
-        plan = _azure_chat_generate_story_plan(client, story_prompt, num_scenes, text_length=text_length)
+        plan = _azure_chat_generate_story_plan(
+            client,
+            story_prompt,
+            num_scenes,
+            text_length=text_length,
+            language=language,
+        )
     except Exception as e:
         print(f"❌ Azure chat generation failed: {e}")
         return None
@@ -422,6 +487,7 @@ def _generate_custom_story_with_images_azure(
         "original_prompt": story_prompt,
         "num_scenes": num_scenes,
         "text_length": _normalize_text_length(text_length),
+        "language": _normalize_language(language),
     }
 
     # Generate/save images
@@ -489,6 +555,7 @@ def generate_custom_story_with_images(
     delay_between_requests=6,
     progress_callback=None,
     text_length: str = "standard",
+    language: str = "auto",
 ):
     """
     Generate a custom story with images based on user input.
@@ -513,6 +580,7 @@ def generate_custom_story_with_images(
             delay_between_requests=delay_between_requests,
             progress_callback=progress_callback,
             text_length=text_length,
+            language=language,
         )
 
     # Use the image generation model (Gemini multimodal)
@@ -520,6 +588,7 @@ def generate_custom_story_with_images(
 
     # Enhanced prompt for better story generation
     text_length_line = _text_length_requirement_line(text_length)
+    language_line = _language_requirement_line(language)
     full_prompt = f"""
     You are an expert storyteller and illustrator creating a captivating picture book.
 
@@ -530,6 +599,7 @@ def generate_custom_story_with_images(
     - Include vivid, engaging descriptions suitable for illustration
     - Make it artistic, engaging, and age-appropriate
     - Generate both descriptive text and a corresponding image for each scene
+    {language_line}
     {text_length_line}
 
     Please create exactly {num_scenes} scenes, each with descriptive text and an accompanying image.
@@ -581,6 +651,7 @@ def generate_custom_story_with_images(
             'original_prompt': story_prompt,
             'num_scenes': num_scenes,
             'text_length': _normalize_text_length(text_length),
+            'language': _normalize_language(language),
             'total_parts': len(response.candidates[0].content.parts)
         }
 
